@@ -1,0 +1,17 @@
+{
+  "name": "小狗的度假日记",
+  "appid": "your-app-id-here",
+  "description": "记录宠物度假的美好瞬间",
+  "versionName": "1.0.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "mp-weixin": {
+    "appid": "your-app-id-here",
+    "setting": {
+      "urlCheck": false,
+      "es6": true,
+      "minified": true
+    },
+    "usingComponents": true
+  }
+}

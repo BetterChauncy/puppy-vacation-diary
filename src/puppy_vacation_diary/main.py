@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from puppy_vacation_diary.core.config import settings
-from puppy_vacation_diary.routers import config, health, media, pets
+from puppy_vacation_diary.routers import auth, config, health, media, pets
 
 
 @asynccontextmanager
@@ -33,6 +33,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(auth.router)
 app.include_router(config.router)
 app.include_router(pets.router)
 app.include_router(media.router)

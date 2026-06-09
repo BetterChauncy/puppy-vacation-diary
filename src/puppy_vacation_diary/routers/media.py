@@ -1,18 +1,26 @@
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
+from sqlalchemy import func as sa_func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from puppy_vacation_diary.core.config import settings
-from puppy_vacation_diary.core.dependencies import get_db
+from puppy_vacation_diary.core.dependencies import get_current_user, get_db
 from puppy_vacation_diary.core.storage import get_storage
 from puppy_vacation_diary.core.thumbnails import make_photo_thumbnail, make_video_thumbnail
 from puppy_vacation_diary.models.comment import Comment
 from puppy_vacation_diary.models.media import Media
 from puppy_vacation_diary.models.pet import Pet
-from puppy_vacation_diary.schemas.media import CommentCreate, CommentResponse, MediaResponse
+from puppy_vacation_diary.models.user import User
+from puppy_vacation_diary.schemas.media import (
+    CommentCreate,
+    CommentResponse,
+    CommentUser,
+    MediaResponse,
+    PaginatedMediaResponse,
+)
 
 router = APIRouter(tags=["media"])
 
@@ -93,12 +101,24 @@ async def upload_media(
     return results
 
 
-@router.get("/pets/{pet_id}/media", response_model=list[MediaResponse])
-async def list_media(pet_id: int, db: AsyncSession = Depends(get_db)) -> list[Media]:
+@router.get("/pets/{pet_id}/media", response_model=PaginatedMediaResponse)
+async def list_media(
+    pet_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+) -> PaginatedMediaResponse:
+    total_q = select(sa_func.count()).select_from(Media).where(Media.pet_id == pet_id)
+    total = (await db.execute(total_q)).scalar() or 0
     result = await db.execute(
-        select(Media).where(Media.pet_id == pet_id).order_by(Media.created_at.desc())
+        select(Media)
+        .where(Media.pet_id == pet_id)
+        .order_by(Media.created_at.desc())
+        .offset(offset)
+        .limit(limit)
     )
-    return list(result.scalars().all())
+    items = list(result.scalars().all())
+    return PaginatedMediaResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/media/{media_id}", response_model=MediaResponse)
@@ -139,11 +159,16 @@ async def toggle_like(media_id: int, liked: bool = True, db: AsyncSession = Depe
 
 
 @router.post("/media/{media_id}/comments", response_model=CommentResponse, status_code=status.HTTP_201_CREATED)
-async def add_comment(media_id: int, data: CommentCreate, db: AsyncSession = Depends(get_db)) -> Comment:
+async def add_comment(
+    media_id: int,
+    data: CommentCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User | None = Depends(get_current_user),
+) -> Comment:
     media = await db.get(Media, media_id)
     if not media:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found")
-    comment = Comment(media_id=media_id, content=data.content)
+    comment = Comment(media_id=media_id, user_id=user.id if user else None, content=data.content)
     db.add(comment)
     await db.flush()
     await db.refresh(comment)
@@ -153,9 +178,12 @@ async def add_comment(media_id: int, data: CommentCreate, db: AsyncSession = Dep
 @router.get("/media/{media_id}/comments", response_model=list[CommentResponse])
 async def list_comments(media_id: int, db: AsyncSession = Depends(get_db)) -> list[Comment]:
     result = await db.execute(
-        select(Comment).where(Comment.media_id == media_id).order_by(Comment.created_at.desc())
+        select(Comment)
+        .options(joinedload(Comment.user))
+        .where(Comment.media_id == media_id)
+        .order_by(Comment.created_at.desc())
     )
-    return list(result.scalars().all())
+    return list(result.unique().scalars().all())
 
 
 @router.delete("/media/comments/{comment_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -81,8 +81,9 @@ async def test_list_media(client: AsyncClient, pet_id: int):
     response = await client.get(f"/pets/{pet_id}/media")
     assert response.status_code == 200
     data = response.json()
-    assert len(data) >= 1
-    assert data[0]["pet_id"] == pet_id
+    assert "items" in data
+    assert len(data["items"]) >= 1
+    assert data["items"][0]["pet_id"] == pet_id
 
 
 @pytest.mark.asyncio
@@ -109,5 +110,5 @@ async def test_delete_media(client: AsyncClient, pet_id: int):
 
     response = await client.get(f"/pets/{pet_id}/media")
     assert response.status_code == 200
-    ids = [m["id"] for m in response.json()]
+    ids = [m["id"] for m in response.json()["items"]]
     assert media_id not in ids

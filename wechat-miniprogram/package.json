@@ -1,0 +1,21 @@
+{
+  "name": "puppy-vacation-diary-miniprogram",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:mp-weixin": "uni -p mp-weixin",
+    "build:mp-weixin": "uni build -p mp-weixin"
+  },
+  "dependencies": {
+    "@dcloudio/uni-app": "3.0.0-alpha-5010220260604001",
+    "@dcloudio/uni-mp-weixin": "3.0.0-alpha-5010220260604001",
+    "vue": "3.4.21"
+  },
+  "devDependencies": {
+    "@dcloudio/uni-cli-shared": "3.0.0-alpha-5010220260604001",
+    "@dcloudio/vite-plugin-uni": "3.0.0-alpha-5010220260604001",
+    "vite": "5.2.8",
+    "postcss": "^8.4.35",
+    "sass": "^1.70.0"
+  }
+}

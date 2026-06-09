@@ -25,6 +25,16 @@
 - `tests/` — pytest + httpx.AsyncClient，使用 SQLite 代替 PostgreSQL
 - `alembic/` — async 迁移
 
+## 小程序（UniApp）
+
+```bash
+cd wechat-miniprogram && npm install
+npm run dev:mp-weixin     # 开发：持续编译到 dist/dev/mp-weixin/
+npm run build:mp-weixin   # 生产：编译到 dist/build/mp-weixin/
+```
+
+微信开发者工具打开 `dist/dev/mp-weixin/` 或 `dist/build/mp-weixin/`。
+
 ## 注意事项
 
 - `uv sync` 需要先执行（已安装 `.venv`）
