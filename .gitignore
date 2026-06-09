@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv
+*.db
+
+# Environment
+.env
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Uploads
+uploads/
+
+# OS
+.DS_Store

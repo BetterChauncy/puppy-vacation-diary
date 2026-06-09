@@ -1,0 +1,167 @@
+import uuid
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from puppy_vacation_diary.core.config import settings
+from puppy_vacation_diary.core.dependencies import get_db
+from puppy_vacation_diary.core.storage import get_storage
+from puppy_vacation_diary.core.thumbnails import make_photo_thumbnail, make_video_thumbnail
+from puppy_vacation_diary.models.comment import Comment
+from puppy_vacation_diary.models.media import Media
+from puppy_vacation_diary.models.pet import Pet
+from puppy_vacation_diary.schemas.media import CommentCreate, CommentResponse, MediaResponse
+
+router = APIRouter(tags=["media"])
+
+IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+VIDEO_TYPES = {"video/mp4", "video/quicktime", "video/x-msvideo"}
+
+
+def _ext(file_name: str) -> str:
+    return Path(file_name).suffix or ""
+
+
+def _media_type(mime: str) -> str:
+    if mime in IMAGE_TYPES:
+        return "photo"
+    if mime in VIDEO_TYPES:
+        return "video"
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported file type: {mime}")
+
+
+def _thumb_subdir(mtype: str) -> str:
+    return f"{mtype}s/thumbs"
+
+
+def _file_subdir(mtype: str) -> str:
+    return f"{mtype}s"
+
+
+@router.post("/pets/{pet_id}/media", response_model=list[MediaResponse], status_code=status.HTTP_201_CREATED)
+async def upload_media(
+    pet_id: int,
+    files: list[UploadFile],
+    db: AsyncSession = Depends(get_db),
+) -> list[Media]:
+    pet = await db.get(Pet, pet_id)
+    if not pet:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pet not found")
+
+    storage = get_storage()
+    results: list[Media] = []
+
+    for file in files:
+        mime = file.content_type or "application/octet-stream"
+        mtype = _media_type(mime)
+        ext = _ext(file.filename or "file")
+        uid = str(uuid.uuid4())
+        file_key = f"{pet_id}/{_file_subdir(mtype)}/{uid}{ext}"
+        thumb_key = f"{pet_id}/{_thumb_subdir(mtype)}/{uid}.webp"
+
+        raw = await file.read()
+        file_size = len(raw)
+
+        await storage.save_bytes(raw, file_key)
+
+        if mtype == "photo":
+            thumb_bytes = await make_photo_thumbnail(raw)
+            await storage.save_bytes(thumb_bytes, thumb_key)
+        else:
+            upload_dir = settings.upload_dir
+            local_path = str(Path(upload_dir) / file_key)
+            thumb_local = str(Path(upload_dir) / thumb_key)
+            Path(thumb_local).parent.mkdir(parents=True, exist_ok=True)
+            await make_video_thumbnail(local_path, thumb_local)
+
+        media = Media(
+            pet_id=pet_id,
+            media_type=mtype,
+            file_key=file_key,
+            thumbnail_key=thumb_key,
+            original_filename=file.filename or "unknown",
+            file_size=file_size,
+            mime_type=mime,
+        )
+        db.add(media)
+        await db.flush()
+        await db.refresh(media)
+        results.append(media)
+
+    return results
+
+
+@router.get("/pets/{pet_id}/media", response_model=list[MediaResponse])
+async def list_media(pet_id: int, db: AsyncSession = Depends(get_db)) -> list[Media]:
+    result = await db.execute(
+        select(Media).where(Media.pet_id == pet_id).order_by(Media.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+@router.get("/media/{media_id}", response_model=MediaResponse)
+async def get_media(media_id: int, db: AsyncSession = Depends(get_db)) -> Media:
+    media = await db.get(Media, media_id)
+    if not media:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found")
+    return media
+
+
+@router.delete("/media/{media_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_media(media_id: int, db: AsyncSession = Depends(get_db)) -> None:
+    media = await db.get(Media, media_id)
+    if not media:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found")
+
+    storage = get_storage()
+    await storage.delete(media.file_key)
+    if media.thumbnail_key:
+        await storage.delete(media.thumbnail_key)
+
+    await db.delete(media)
+    await db.flush()
+
+
+@router.post("/media/{media_id}/like")
+async def toggle_like(media_id: int, liked: bool = True, db: AsyncSession = Depends(get_db)):
+    media = await db.get(Media, media_id)
+    if not media:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found")
+    if liked:
+        media.likes_count = Media.likes_count + 1
+    else:
+        media.likes_count = Media.likes_count - 1
+    await db.flush()
+    await db.refresh(media)
+    return {"likes_count": media.likes_count}
+
+
+@router.post("/media/{media_id}/comments", response_model=CommentResponse, status_code=status.HTTP_201_CREATED)
+async def add_comment(media_id: int, data: CommentCreate, db: AsyncSession = Depends(get_db)) -> Comment:
+    media = await db.get(Media, media_id)
+    if not media:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found")
+    comment = Comment(media_id=media_id, content=data.content)
+    db.add(comment)
+    await db.flush()
+    await db.refresh(comment)
+    return comment
+
+
+@router.get("/media/{media_id}/comments", response_model=list[CommentResponse])
+async def list_comments(media_id: int, db: AsyncSession = Depends(get_db)) -> list[Comment]:
+    result = await db.execute(
+        select(Comment).where(Comment.media_id == media_id).order_by(Comment.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+@router.delete("/media/comments/{comment_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_comment(comment_id: int, db: AsyncSession = Depends(get_db)) -> None:
+    comment = await db.get(Comment, comment_id)
+    if not comment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
+    await db.delete(comment)
+    await db.flush()
