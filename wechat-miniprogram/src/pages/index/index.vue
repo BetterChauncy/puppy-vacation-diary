@@ -98,13 +98,16 @@ export default {
       }
       uni.showLoading({ title: '上传中...' })
       try {
-        const ext = file.tempFilePath.split('.').pop() || 'jpg'
+        const ext = (file.tempFilePath || '').split('.').pop() || 'jpg'
         const cloudPath = `pets/${this.petId}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`
         const uploadRes = await wx.cloud.uploadFile({
           cloudPath,
           filePath: file.tempFilePath,
         })
-        const [fileObj] = await wx.cloud.getTempFileURL([uploadRes.fileID])
+        const urlRes = await wx.cloud.getTempFileURL({
+          fileList: [{ fileID: uploadRes.fileID }],
+        })
+        const fileObj = urlRes.fileList[0]
         const mimeType = file.fileType === 'video' ? 'video/mp4' : `image/${ext === 'png' ? 'png' : 'jpeg'}`
         await createFromCloud(this.petId, {
           file_id: uploadRes.fileID,
