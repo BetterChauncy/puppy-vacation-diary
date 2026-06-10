@@ -1,10 +1,14 @@
 <template>
   <view>
     <view v-if="loading" class="loading">加载中...</view>
+    <view v-else-if="error" class="error">
+      <text>加载失败</text>
+      <button class="retry-btn" @click="load">重试</button>
+    </view>
     <template v-else>
       <PetProfile :pet="pet" />
       <view class="section-title">📸 全部记录</view>
-      <MediaGrid :items="media" />
+      <MediaGrid :items="media" :petId="petId" />
     </template>
   </view>
 </template>
@@ -22,6 +26,7 @@ export default {
       pet: null,
       media: [],
       loading: true,
+      error: false,
     }
   },
   onLoad(options) {
@@ -33,12 +38,14 @@ export default {
   methods: {
     async load() {
       this.loading = true
+      this.error = false
       try {
         this.pet = await fetchPet(this.petId)
         const res = await fetchMedia(this.petId, 50, 0)
         this.media = res.items || res
-      } catch {
-        uni.showToast({ title: '加载失败', icon: 'none' })
+      } catch (e) {
+        console.error('宠物详情加载失败:', e)
+        this.error = true
       } finally {
         this.loading = false
       }
@@ -48,11 +55,25 @@ export default {
 </script>
 
 <style scoped>
-.loading {
+.loading,
+.empty,
+.error {
   text-align: center;
   padding: 64px 16px;
   color: #999;
   font-size: 14px;
+}
+.error {
+  color: #ef4444;
+}
+.retry-btn {
+  margin-top: 12px;
+  padding: 6px 20px;
+  border-radius: 16px;
+  border: 1px solid #ef4444;
+  color: #ef4444;
+  background: #fff;
+  font-size: 13px;
 }
 .section-title {
   font-size: 15px;

@@ -42,7 +42,7 @@ export async function deletePet(id: number): Promise<void> {
 
 export async function fetchMedia(petId: number): Promise<Media[]> {
   const { data } = await http.get(`/pets/${petId}/media`)
-  return data
+  return data.items
 }
 
 export async function fetchMediaItem(id: number): Promise<Media> {

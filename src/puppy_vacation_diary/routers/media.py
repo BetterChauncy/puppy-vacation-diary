@@ -1,5 +1,10 @@
+import asyncio
+import logging
+import os
 import uuid
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from sqlalchemy import func as sa_func, select
@@ -26,16 +31,23 @@ router = APIRouter(tags=["media"])
 
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 VIDEO_TYPES = {"video/mp4", "video/quicktime", "video/x-msvideo"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"}
+VIDEO_EXTS = {".mp4", ".mov", ".avi", ".webm", ".mkv"}
 
 
 def _ext(file_name: str) -> str:
     return Path(file_name).suffix or ""
 
 
-def _media_type(mime: str) -> str:
+def _media_type(mime: str, filename: str = "") -> str:
     if mime in IMAGE_TYPES:
         return "photo"
     if mime in VIDEO_TYPES:
+        return "video"
+    ext = Path(filename).suffix.lower()
+    if ext in IMAGE_EXTS:
+        return "photo"
+    if ext in VIDEO_EXTS:
         return "video"
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported file type: {mime}")
 
@@ -63,7 +75,7 @@ async def upload_media(
 
     for file in files:
         mime = file.content_type or "application/octet-stream"
-        mtype = _media_type(mime)
+        mtype = _media_type(mime, file.filename or "")
         ext = _ext(file.filename or "file")
         uid = str(uuid.uuid4())
         file_key = f"{pet_id}/{_file_subdir(mtype)}/{uid}{ext}"
@@ -82,6 +94,63 @@ async def upload_media(
             local_path = str(Path(upload_dir) / file_key)
             thumb_local = str(Path(upload_dir) / thumb_key)
             Path(thumb_local).parent.mkdir(parents=True, exist_ok=True)
+
+            # Transcode HEVC/H.265 → H.264 for broad mini program compatibility
+            new_file_key = file_key.rsplit(".", 1)[0] + ".mp4"
+            new_local_path = str(Path(upload_dir) / new_file_key)
+            tmp_path = local_path + "_h264.mp4"
+
+            async def _transcode(audio_opt: str) -> tuple[int, bytes]:
+                args = [
+                    "ffmpeg", "-y",
+                    "-i", local_path,
+                    "-c:v", "libx264",
+                    "-profile:v", "baseline",
+                    "-pix_fmt", "yuv420p",
+                    "-preset", "medium",
+                    "-crf", "23",
+                    "-movflags", "+faststart",
+                ]
+                if audio_opt:
+                    args.extend(["-c:a", audio_opt])
+                else:
+                    args.append("-an")
+                args.append(tmp_path)
+                proc = await asyncio.create_subprocess_exec(
+                    *args,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, stderr = await proc.communicate()
+                return proc.returncode, stderr
+
+            ret, stderr = await _transcode("aac")
+            if ret != 0:
+                logger.warning(
+                    "ffmpeg aac failed (ret=%d), retrying without audio. stderr=%s",
+                    ret, stderr.decode(errors="replace")[-500:],
+                )
+                ret, stderr = await _transcode("")
+
+            if ret == 0:
+                with open(tmp_path, "rb") as f:
+                    transcoded = f.read()
+                await storage.save_bytes(transcoded, new_file_key)
+                if new_file_key != file_key:
+                    await storage.delete(file_key)
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+                file_key = new_file_key
+                local_path = new_local_path
+                file_size = len(transcoded)
+            else:
+                logger.error(
+                    "ffmpeg all attempts failed for %s, keeping original. stderr=%s",
+                    file_key, stderr.decode(errors="replace")[-500:],
+                )
+
             await make_video_thumbnail(local_path, thumb_local)
 
         media = Media(

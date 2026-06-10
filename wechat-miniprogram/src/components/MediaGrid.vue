@@ -33,6 +33,7 @@ import { MEDIA_URL } from '../utils/constants'
 export default {
   props: {
     items: { type: Array, default: () => [] },
+    petId: { type: Number, default: 0 },
   },
   methods: {
     mediaUrl(key) {
@@ -40,7 +41,7 @@ export default {
     },
     onClick(item, index) {
       uni.navigateTo({
-        url: `/pages/media-preview/media-preview?mediaId=${item.id}&index=${index}`,
+        url: `/pages/media-preview/media-preview?mediaId=${item.id}&index=${index}&petId=${this.petId || item.pet_id || ''}`,
       })
     },
   },

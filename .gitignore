@@ -21,6 +21,9 @@ uploads/
 # OS
 .DS_Store
 
+# Logs
+*.log
+
 # WeChat Mini Program (UniApp)
 wechat-miniprogram/node_modules/
 wechat-miniprogram/dist/
