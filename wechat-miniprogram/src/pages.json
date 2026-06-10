@@ -4,6 +4,7 @@
     { "path": "pages/discover/discover", "style": { "navigationBarTitleText": "发现" } },
     { "path": "pages/profile/profile", "style": { "navigationBarTitleText": "我的" } },
     { "path": "pages/pet-detail/pet-detail", "style": { "navigationBarTitleText": "宠物日记" } },
+    { "path": "pages/pet-add/pet-add", "style": { "navigationBarTitleText": "添加宠物" } },
     { "path": "pages/media-preview/media-preview", "style": { "navigationStyle": "custom" } }
   ],
   "globalStyle": {
