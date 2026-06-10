@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
-COPY pyproject.toml uv.lock .
+COPY pyproject.toml README.md uv.lock .
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY src/ src/
