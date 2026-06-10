@@ -43,7 +43,7 @@ async def _get_or_create_user(db: AsyncSession, openid: str) -> tuple[User, bool
 async def _wx_code_to_openid(code: str) -> str:
     if not settings.wechat_appid or not settings.wechat_secret:
         return f"mock_openid_{code[:16]}"
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=False) as client:
         resp = await client.get(
             "https://api.weixin.qq.com/sns/jscode2session",
             params={

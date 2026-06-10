@@ -202,7 +202,7 @@ async def create_media_from_cloud(
     mtype = _media_type(data.mime_type, data.original_filename)
     ext = _ext(data.original_filename)
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=False) as client:
         resp = await client.get(data.temp_file_url)
         resp.raise_for_status()
         raw = resp.content
