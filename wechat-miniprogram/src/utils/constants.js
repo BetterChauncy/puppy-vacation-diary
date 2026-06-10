@@ -1,6 +1,7 @@
-const DEV = false
-const DEV_URL = 'http://localhost:8000'
-const PROD_URL = 'https://puddy-2117605-1313120572.ap-shanghai.run.tcloudbase.com'
+export const ENV_ID = 'prod-0g180uoh1e93e7a6'
+export const SERVICE_NAME = 'puddy-011'
 
-export const BASE_URL = DEV ? DEV_URL : PROD_URL
-export const MEDIA_URL = (key) => `${BASE_URL}/uploads/${key}`
+const PUBLIC_URL = 'https://puddy-2117605-1313120572.ap-shanghai.run.tcloudbase.com'
+
+export const BASE_URL = PUBLIC_URL
+export const MEDIA_URL = (key) => `${PUBLIC_URL}/uploads/${key}`

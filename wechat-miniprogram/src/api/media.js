@@ -1,9 +1,4 @@
-import { BASE_URL } from '../utils/constants'
 import { get, post, del } from './request'
-
-function getToken() {
-  return uni.getStorageSync('token') || ''
-}
 
 export async function fetchMedia(petId, limit = 20, offset = 0) {
   return get(`/pets/${petId}/media?limit=${limit}&offset=${offset}`)

@@ -1,21 +1,25 @@
-import { BASE_URL } from '../utils/constants'
+import { ENV_ID, SERVICE_NAME } from '../utils/constants'
 
 function getToken() {
   return uni.getStorageSync('token') || ''
 }
 
 async function request(method, path, data = null, options = {}) {
-  const url = BASE_URL + path
   const token = getToken()
   const header = { 'Content-Type': 'application/json' }
   if (token) header['Authorization'] = `Bearer ${token}`
+  if (options.header) Object.assign(header, options.header)
 
   return new Promise((resolve, reject) => {
-    uni.request({
-      url,
+    wx.cloud.callContainer({
+      config: { env: ENV_ID },
+      path,
       method,
       data,
-      header,
+      header: {
+        'X-WX-SERVICE': SERVICE_NAME,
+        ...header,
+      },
       timeout: options.timeout || 15000,
       success: (res) => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
