@@ -6,7 +6,7 @@ export default {
     user: null,
   },
   onLaunch() {
-    wx.cloud.init()
+    wx.cloud.init({ env: 'prod-0g180uoh1e93e7a6' })
     this.doLogin()
   },
   methods: {
