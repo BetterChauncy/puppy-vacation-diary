@@ -1,3 +1,5 @@
+import logging
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -8,6 +10,8 @@ from puppy_vacation_diary.core.auth import create_access_token
 from puppy_vacation_diary.core.config import settings
 from puppy_vacation_diary.core.dependencies import get_current_user, get_db
 from puppy_vacation_diary.models.user import User
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["auth"])
 
@@ -42,21 +46,30 @@ async def _get_or_create_user(db: AsyncSession, openid: str) -> tuple[User, bool
 
 async def _wx_code_to_openid(code: str) -> str:
     if not settings.wechat_appid or not settings.wechat_secret:
+        logger.warning("WECHAT_APPID or WECHAT_SECRET not set, using mock openid")
         return f"mock_openid_{code[:16]}"
-    async with httpx.AsyncClient(verify=False) as client:
-        resp = await client.get(
-            "https://api.weixin.qq.com/sns/jscode2session",
-            params={
-                "appid": settings.wechat_appid,
-                "secret": settings.wechat_secret,
-                "js_code": code,
-                "grant_type": "authorization_code",
-            },
-        )
-        data = resp.json()
-        if "openid" not in data:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"wx login failed: {data}")
-        return data["openid"]
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=15) as client:
+            resp = await client.get(
+                "https://api.weixin.qq.com/sns/jscode2session",
+                params={
+                    "appid": settings.wechat_appid,
+                    "secret": settings.wechat_secret,
+                    "js_code": code,
+                    "grant_type": "authorization_code",
+                },
+            )
+            data = resp.json()
+            if "openid" not in data:
+                logger.error("wx jscode2session failed: %s", data)
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"wx login failed: {data}")
+            return data["openid"]
+    except httpx.TimeoutException:
+        logger.error("wx jscode2session timed out")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="wx jscode2session timed out")
+    except httpx.RequestError as e:
+        logger.error("wx jscode2session request failed: %s", str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"wx jscode2session failed: {e}")
 
 
 @router.post("/auth/wx-login", response_model=WxLoginResponse)
