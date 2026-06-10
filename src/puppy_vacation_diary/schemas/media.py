@@ -18,6 +18,14 @@ class MediaResponse(BaseModel):
     created_at: datetime.datetime
 
 
+class CloudMediaCreate(BaseModel):
+    file_id: str
+    temp_file_url: str
+    mime_type: str
+    original_filename: str
+    file_size: int
+
+
 class PaginatedMediaResponse(BaseModel):
     items: list[MediaResponse]
     total: int

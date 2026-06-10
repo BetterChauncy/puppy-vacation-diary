@@ -22,8 +22,7 @@
 <script>
 import { fetchConfig } from '../../api/config'
 import { fetchPet, fetchPets } from '../../api/pet'
-import { fetchMedia } from '../../api/media'
-import { BASE_URL } from '../../utils/constants'
+import { fetchMedia, createFromCloud } from '../../api/media'
 import PetProfile from '../../components/PetProfile.vue'
 import MediaGrid from '../../components/MediaGrid.vue'
 
@@ -99,26 +98,20 @@ export default {
       }
       uni.showLoading({ title: '上传中...' })
       try {
-        const token = uni.getStorageSync('token') || ''
-        await new Promise((resolve, reject) => {
-          uni.uploadFile({
-            url: `${BASE_URL}/pets/${this.petId}/media`,
-            filePath: file.tempFilePath,
-            name: 'files',
-            header: token ? { Authorization: `Bearer ${token}` } : {},
-            success: (r) => {
-              if (r.statusCode >= 200 && r.statusCode < 300) resolve(r.data)
-              else {
-                let msg = `上传失败 (${r.statusCode})`
-                try {
-                  const body = typeof r.data === 'string' ? JSON.parse(r.data) : r.data
-                  if (body?.detail) msg = body.detail
-                } catch {}
-                reject(new Error(msg))
-              }
-            },
-            fail: reject,
-          })
+        const ext = file.tempFilePath.split('.').pop() || 'jpg'
+        const cloudPath = `pets/${this.petId}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`
+        const uploadRes = await wx.cloud.uploadFile({
+          cloudPath,
+          filePath: file.tempFilePath,
+        })
+        const [fileObj] = await wx.cloud.getTempFileURL([uploadRes.fileID])
+        const mimeType = file.fileType === 'video' ? 'video/mp4' : `image/${ext === 'png' ? 'png' : 'jpeg'}`
+        await createFromCloud(this.petId, {
+          file_id: uploadRes.fileID,
+          temp_file_url: fileObj.tempFileURL,
+          mime_type: mimeType,
+          original_filename: cloudPath.split('/').pop() || 'unknown',
+          file_size: file.size || 0,
         })
         uni.hideLoading()
         uni.showToast({ title: '上传成功', icon: 'success' })

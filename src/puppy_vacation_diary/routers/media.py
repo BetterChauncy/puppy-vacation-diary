@@ -6,6 +6,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+import httpx
+
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from sqlalchemy import func as sa_func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +22,7 @@ from puppy_vacation_diary.models.media import Media
 from puppy_vacation_diary.models.pet import Pet
 from puppy_vacation_diary.models.user import User
 from puppy_vacation_diary.schemas.media import (
+    CloudMediaCreate,
     CommentCreate,
     CommentResponse,
     CommentUser,
@@ -60,6 +63,109 @@ def _file_subdir(mtype: str) -> str:
     return f"{mtype}s"
 
 
+async def _process_media_bytes(
+    raw: bytes,
+    pet_id: int,
+    mtype: str,
+    ext: str,
+    original_filename: str,
+    mime_type: str,
+    db: AsyncSession,
+) -> Media:
+    storage = get_storage()
+    uid = str(uuid.uuid4())
+    file_key = f"{pet_id}/{_file_subdir(mtype)}/{uid}{ext}"
+    thumb_key = f"{pet_id}/{_thumb_subdir(mtype)}/{uid}.webp"
+    file_size = len(raw)
+
+    await storage.save_bytes(raw, file_key)
+
+    if mtype == "photo":
+        thumb_bytes = await make_photo_thumbnail(raw)
+        await storage.save_bytes(thumb_bytes, thumb_key)
+    else:
+        upload_dir = settings.upload_dir
+        local_path = str(Path(upload_dir) / file_key)
+        thumb_local = str(Path(upload_dir) / thumb_key)
+        Path(thumb_local).parent.mkdir(parents=True, exist_ok=True)
+
+        # Write temp file for ffmpeg
+        Path(local_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(local_path).write_bytes(raw)
+
+        # Transcode HEVC/H.265 → H.264
+        new_file_key = file_key.rsplit(".", 1)[0] + ".mp4"
+        new_local_path = str(Path(upload_dir) / new_file_key)
+        tmp_path = local_path + "_h264.mp4"
+
+        async def _transcode(audio_opt: str) -> tuple[int, bytes]:
+            args = [
+                "ffmpeg", "-y",
+                "-i", local_path,
+                "-c:v", "libx264",
+                "-profile:v", "baseline",
+                "-pix_fmt", "yuv420p",
+                "-preset", "medium",
+                "-crf", "23",
+                "-movflags", "+faststart",
+            ]
+            if audio_opt:
+                args.extend(["-c:a", audio_opt])
+            else:
+                args.append("-an")
+            args.append(tmp_path)
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            return proc.returncode, stderr
+
+        ret, stderr = await _transcode("aac")
+        if ret != 0:
+            logger.warning(
+                "ffmpeg aac failed (ret=%d), retrying without audio. stderr=%s",
+                ret, stderr.decode(errors="replace")[-500:],
+            )
+            ret, stderr = await _transcode("")
+
+        if ret == 0:
+            with open(tmp_path, "rb") as f:
+                transcoded = f.read()
+            await storage.save_bytes(transcoded, new_file_key)
+            if new_file_key != file_key:
+                await storage.delete(file_key)
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            file_key = new_file_key
+            local_path = new_local_path
+            file_size = len(transcoded)
+        else:
+            logger.error(
+                "ffmpeg all attempts failed for %s, keeping original. stderr=%s",
+                file_key, stderr.decode(errors="replace")[-500:],
+            )
+
+        await make_video_thumbnail(local_path, thumb_local)
+
+    media = Media(
+        pet_id=pet_id,
+        media_type=mtype,
+        file_key=file_key,
+        thumbnail_key=thumb_key,
+        original_filename=original_filename,
+        file_size=file_size,
+        mime_type=mime_type,
+    )
+    db.add(media)
+    await db.flush()
+    await db.refresh(media)
+    return media
+
+
 @router.post("/pets/{pet_id}/media", response_model=list[MediaResponse], status_code=status.HTTP_201_CREATED)
 async def upload_media(
     pet_id: int,
@@ -70,104 +176,38 @@ async def upload_media(
     if not pet:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pet not found")
 
-    storage = get_storage()
     results: list[Media] = []
 
     for file in files:
         mime = file.content_type or "application/octet-stream"
         mtype = _media_type(mime, file.filename or "")
         ext = _ext(file.filename or "file")
-        uid = str(uuid.uuid4())
-        file_key = f"{pet_id}/{_file_subdir(mtype)}/{uid}{ext}"
-        thumb_key = f"{pet_id}/{_thumb_subdir(mtype)}/{uid}.webp"
-
         raw = await file.read()
-        file_size = len(raw)
-
-        await storage.save_bytes(raw, file_key)
-
-        if mtype == "photo":
-            thumb_bytes = await make_photo_thumbnail(raw)
-            await storage.save_bytes(thumb_bytes, thumb_key)
-        else:
-            upload_dir = settings.upload_dir
-            local_path = str(Path(upload_dir) / file_key)
-            thumb_local = str(Path(upload_dir) / thumb_key)
-            Path(thumb_local).parent.mkdir(parents=True, exist_ok=True)
-
-            # Transcode HEVC/H.265 → H.264 for broad mini program compatibility
-            new_file_key = file_key.rsplit(".", 1)[0] + ".mp4"
-            new_local_path = str(Path(upload_dir) / new_file_key)
-            tmp_path = local_path + "_h264.mp4"
-
-            async def _transcode(audio_opt: str) -> tuple[int, bytes]:
-                args = [
-                    "ffmpeg", "-y",
-                    "-i", local_path,
-                    "-c:v", "libx264",
-                    "-profile:v", "baseline",
-                    "-pix_fmt", "yuv420p",
-                    "-preset", "medium",
-                    "-crf", "23",
-                    "-movflags", "+faststart",
-                ]
-                if audio_opt:
-                    args.extend(["-c:a", audio_opt])
-                else:
-                    args.append("-an")
-                args.append(tmp_path)
-                proc = await asyncio.create_subprocess_exec(
-                    *args,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                _, stderr = await proc.communicate()
-                return proc.returncode, stderr
-
-            ret, stderr = await _transcode("aac")
-            if ret != 0:
-                logger.warning(
-                    "ffmpeg aac failed (ret=%d), retrying without audio. stderr=%s",
-                    ret, stderr.decode(errors="replace")[-500:],
-                )
-                ret, stderr = await _transcode("")
-
-            if ret == 0:
-                with open(tmp_path, "rb") as f:
-                    transcoded = f.read()
-                await storage.save_bytes(transcoded, new_file_key)
-                if new_file_key != file_key:
-                    await storage.delete(file_key)
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
-                file_key = new_file_key
-                local_path = new_local_path
-                file_size = len(transcoded)
-            else:
-                logger.error(
-                    "ffmpeg all attempts failed for %s, keeping original. stderr=%s",
-                    file_key, stderr.decode(errors="replace")[-500:],
-                )
-
-            await make_video_thumbnail(local_path, thumb_local)
-
-        media = Media(
-            pet_id=pet_id,
-            media_type=mtype,
-            file_key=file_key,
-            thumbnail_key=thumb_key,
-            original_filename=file.filename or "unknown",
-            file_size=file_size,
-            mime_type=mime,
-        )
-        db.add(media)
-        await db.flush()
-        await db.refresh(media)
+        media = await _process_media_bytes(raw, pet_id, mtype, ext, file.filename or "unknown", mime, db)
         results.append(media)
 
     return results
+
+
+@router.post("/pets/{pet_id}/media/from-cloud", response_model=MediaResponse, status_code=status.HTTP_201_CREATED)
+async def create_media_from_cloud(
+    pet_id: int,
+    data: CloudMediaCreate,
+    db: AsyncSession = Depends(get_db),
+) -> Media:
+    pet = await db.get(Pet, pet_id)
+    if not pet:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pet not found")
+
+    mtype = _media_type(data.mime_type, data.original_filename)
+    ext = _ext(data.original_filename)
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(data.temp_file_url)
+        resp.raise_for_status()
+        raw = resp.content
+
+    return await _process_media_bytes(raw, pet_id, mtype, ext, data.original_filename, data.mime_type, db)
 
 
 @router.get("/pets/{pet_id}/media", response_model=PaginatedMediaResponse)

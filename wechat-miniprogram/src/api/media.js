@@ -1,5 +1,9 @@
 import { get, post, del } from './request'
 
+export async function createFromCloud(petId, data) {
+  return post(`/pets/${petId}/media/from-cloud`, data)
+}
+
 export async function fetchMedia(petId, limit = 20, offset = 0) {
   return get(`/pets/${petId}/media?limit=${limit}&offset=${offset}`)
 }
